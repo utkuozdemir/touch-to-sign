@@ -13,28 +13,29 @@ func findGPG() -> String? {
 }
 
 guard let gpg = findGPG() else {
-    FileHandle.standardError.write("gpg-touch: gpg not found, set GPG_TOUCH_GPG\n".data(using: .utf8)!)
+    fputs("gpg-touch: gpg not found, set GPG_TOUCH_GPG\n", stderr)
     exit(2)
 }
 
+let argv = ([gpg] + args).map { strdup($0) } + [nil]
+
 if args.contains("--verify") {
-    let argv = ([gpg] + args).map { strdup($0) } + [nil]
     execv(gpg, argv)
     perror("gpg-touch: exec \(gpg)")
     exit(2)
 }
 
-let proc = Process()
-proc.executableURL = URL(fileURLWithPath: gpg)
-proc.arguments = args
-proc.terminationHandler = { p in
-    exit(p.terminationReason == .uncaughtSignal ? 128 + p.terminationStatus : p.terminationStatus)
-}
-do {
-    try proc.run()
-} catch {
-    FileHandle.standardError.write("gpg-touch: run \(gpg): \(error)\n".data(using: .utf8)!)
+// Unlike Process, posix_spawn keeps gpg in our process group, so Ctrl-C stops it too.
+var pid: pid_t = 0
+let rc = posix_spawn(&pid, gpg, nil, nil, argv, environ)
+if rc != 0 {
+    fputs("gpg-touch: run \(gpg): \(String(cString: strerror(rc)))\n", stderr)
     exit(2)
+}
+DispatchQueue.global().async {
+    var status: Int32 = 0
+    while waitpid(pid, &status, 0) < 0 && errno == EINTR {}
+    exit(status & 0x7f == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f))
 }
 
 // git runs gpg from the top of the work tree.
@@ -99,8 +100,5 @@ icon.layer?.add(pulse, forKey: "pulse")
 // The Handoff alert tone, or Glass on systems without it.
 let handoff = URL(fileURLWithPath: "/System/Library/PrivateFrameworks/ToneLibrary.framework/Resources/AlertTones/EncoreInfinitum/Handoff-EncoreInfinitum.caf")
 (NSSound(contentsOf: handoff, byReference: true) ?? NSSound(named: "Glass"))?.play()
-
-// The card stops waiting for a touch long before this.
-Timer.scheduledTimer(withTimeInterval: 60, repeats: false) { _ in panel.orderOut(nil) }
 
 app.run()
