@@ -1,35 +1,70 @@
-# gpg-touch
+# touch-to-sign
 
-A `gpg.program` for git on macOS. It shows a small "Touch your YubiKey" HUD with a sound while gpg signs a commit or a tag.
+Shows a "Touch your YubiKey" popup on macOS while git signs a commit or a tag.
 
-The YubiKey only blinks while it waits for a touch, and the wait times out after about 15 seconds. A missed touch fails the signature, and the retry usually asks for the PIN again. The HUD makes the wait hard to miss.
-
-- The HUD stays on top on all spaces, but it never takes focus, so pinentry keeps the keyboard.
-- It shows up on the screen with the mouse, under the menu bar, with the repository name.
-- It disappears as soon as gpg exits. The gpg exit code is passed through to git.
-- Signature verification (`git log --show-signature`, `git verify-commit`) goes directly to gpg without a HUD.
+The YubiKey only blinks while it waits for a touch, and it stops waiting after about 15 seconds. When the touch is missed, the signature fails, and the next try usually asks for the PIN again. The popup and its sound make the wait hard to miss.
 
 ## Install
 
-Requires the Xcode command line tools (`xcode-select --install`) and GnuPG.
+This assumes git already signs your commits with a GPG key on a YubiKey. It needs macOS 13 or newer.
+
+1. Install the Xcode command line tools, which contain the Swift compiler. Skip this step if `swiftc --version` already works.
+
+   ```sh
+   xcode-select --install
+   ```
+
+2. Clone this repository and build `touch-to-sign` into `~/.local/bin`.
+
+   ```sh
+   git clone https://github.com/utkuozdemir/touch-to-sign.git
+   cd touch-to-sign
+   mkdir -p ~/.local/bin
+   swiftc -O -o ~/.local/bin/touch-to-sign touch-to-sign.swift
+   ```
+
+3. Tell git to sign through `touch-to-sign` instead of calling gpg directly.
+
+   ```sh
+   git config --global gpg.program ~/.local/bin/touch-to-sign
+   ```
+
+The next signed commit shows the popup.
+
+To update, run `git pull` in the clone, then the `swiftc` command from step 2 again.
+
+## Settings
+
+Nothing needs to be set. The settings live in git config, so they also apply when a GUI git client signs.
+
+| Setting | Default | |
+|---|---|---|
+| `touch-to-sign.title` | `Touch your YubiKey` | The popup text. |
+| `touch-to-sign.sound` | The Handoff alert tone | A sound file, a system sound name such as `Ping`, or `none` for silence. |
+| `touch-to-sign.program` | `gpg`, looked up in `PATH`, `/opt/homebrew/bin`, `/usr/local/bin` and `/usr/local/MacGPG2/bin` | The gpg binary to run. |
+
+For example:
 
 ```sh
-git clone https://github.com/utkuozdemir/gpg-touch.git
-cd gpg-touch
-mkdir -p ~/.local/bin
-swiftc -O -o ~/.local/bin/gpg-touch gpg-touch.swift
-git config --global gpg.program ~/.local/bin/gpg-touch
+git config --global touch-to-sign.sound none
 ```
 
-To update, pull and run the `swiftc` command again.
+Without `--global`, a setting applies only to the current repository.
 
-gpg is looked up in `PATH`, then in `/opt/homebrew/bin`, `/usr/local/bin` and `/usr/local/MacGPG2/bin`. Set `GPG_TOUCH_GPG` to the gpg binary to override it.
+## How it works
 
-The HUD shows up on every signature. If the signing key does not require a touch, it only flashes for a moment. `ykman openpgp keys set-touch sig on` turns the touch requirement on.
+`touch-to-sign` starts gpg with the same arguments, shows the popup, and closes it when gpg exits.
+
+- The popup stays on top on all spaces. It never takes focus, so the PIN prompt keeps the keyboard.
+- It shows up on the screen with the mouse, under the menu bar, with the repository name.
+- The gpg exit code is passed through to git.
+- When git only checks a signature (e.g., `git log --show-signature`), gpg runs without the popup.
+
+The popup shows up on every signature. If your key does not require a touch, it only flashes for a moment.
 
 ## Uninstall
 
 ```sh
 git config --global --unset gpg.program
-rm ~/.local/bin/gpg-touch
+rm ~/.local/bin/touch-to-sign
 ```
