@@ -8,30 +8,38 @@ The YubiKey only blinks while it waits for a touch, and it stops waiting after a
 
 This assumes git already signs your commits with a GPG key on a YubiKey. It needs macOS 13 or newer.
 
-1. Install the Xcode command line tools, which contain the Swift compiler. Skip this step if `swiftc --version` already works.
+1. Install `touch-to-sign` with Homebrew. It is built from source on your Mac, which takes a second.
 
    ```sh
-   xcode-select --install
+   brew install utkuozdemir/tap/touch-to-sign
    ```
 
-2. Clone this repository and build `touch-to-sign` into `~/.local/bin`.
+2. Tell git to sign through `touch-to-sign` instead of calling gpg directly.
 
    ```sh
-   git clone https://github.com/utkuozdemir/touch-to-sign.git
-   cd touch-to-sign
-   mkdir -p ~/.local/bin
-   swiftc -O -o ~/.local/bin/touch-to-sign touch-to-sign.swift
-   ```
-
-3. Tell git to sign through `touch-to-sign` instead of calling gpg directly.
-
-   ```sh
-   git config --global gpg.program ~/.local/bin/touch-to-sign
+   git config --global gpg.program "$(brew --prefix)/bin/touch-to-sign"
    ```
 
 The next signed commit shows the popup.
 
-To update, run `git pull` in the clone, then the `swiftc` command from step 2 again.
+To update, run `brew upgrade touch-to-sign`.
+
+<details>
+<summary>Without Homebrew</summary>
+
+Build it with the Swift compiler from the Xcode command line tools (`xcode-select --install`):
+
+```sh
+git clone https://github.com/utkuozdemir/touch-to-sign.git
+cd touch-to-sign
+mkdir -p ~/.local/bin
+swiftc -O -o ~/.local/bin/touch-to-sign touch-to-sign.swift
+git config --global gpg.program ~/.local/bin/touch-to-sign
+```
+
+To update, run `git pull` in the clone, then the `swiftc` command again.
+
+</details>
 
 ## Settings
 
@@ -66,5 +74,7 @@ The popup shows up on every signature. If your key does not require a touch, it 
 
 ```sh
 git config --global --unset gpg.program
-rm ~/.local/bin/touch-to-sign
+brew uninstall touch-to-sign
 ```
+
+Without Homebrew, delete `~/.local/bin/touch-to-sign` instead.
