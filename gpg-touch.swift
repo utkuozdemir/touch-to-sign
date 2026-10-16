@@ -1,0 +1,106 @@
+// A gpg.program for git that shows a "touch your YubiKey" HUD while gpg signs.
+// The HUD never takes focus, so pinentry keeps the keyboard.
+import AppKit
+
+let args = Array(CommandLine.arguments.dropFirst())
+
+func findGPG() -> String? {
+    if let gpg = ProcessInfo.processInfo.environment["GPG_TOUCH_GPG"] { return gpg }
+    let path = ProcessInfo.processInfo.environment["PATH"]?.split(separator: ":").map(String.init) ?? []
+    // git started from a GUI app may have a minimal PATH
+    let dirs = path + ["/opt/homebrew/bin", "/usr/local/bin", "/usr/local/MacGPG2/bin"]
+    return dirs.map { $0 + "/gpg" }.first { FileManager.default.isExecutableFile(atPath: $0) }
+}
+
+guard let gpg = findGPG() else {
+    FileHandle.standardError.write("gpg-touch: gpg not found, set GPG_TOUCH_GPG\n".data(using: .utf8)!)
+    exit(2)
+}
+
+if args.contains("--verify") {
+    let argv = ([gpg] + args).map { strdup($0) } + [nil]
+    execv(gpg, argv)
+    perror("gpg-touch: exec \(gpg)")
+    exit(2)
+}
+
+let proc = Process()
+proc.executableURL = URL(fileURLWithPath: gpg)
+proc.arguments = args
+proc.terminationHandler = { p in
+    exit(p.terminationReason == .uncaughtSignal ? 128 + p.terminationStatus : p.terminationStatus)
+}
+do {
+    try proc.run()
+} catch {
+    FileHandle.standardError.write("gpg-touch: run \(gpg): \(error)\n".data(using: .utf8)!)
+    exit(2)
+}
+
+// git runs gpg from the top of the work tree.
+let repo = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).lastPathComponent
+
+let app = NSApplication.shared
+app.setActivationPolicy(.accessory)
+
+let size = NSSize(width: 340, height: 72)
+let panel = NSPanel(contentRect: NSRect(origin: .zero, size: size),
+                    styleMask: [.nonactivatingPanel, .borderless],
+                    backing: .buffered, defer: false)
+panel.level = .statusBar
+panel.isOpaque = false
+panel.backgroundColor = .clear
+panel.hasShadow = true
+panel.ignoresMouseEvents = true
+panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+
+let blur = NSVisualEffectView(frame: NSRect(origin: .zero, size: size))
+blur.material = .hudWindow
+blur.state = .active
+blur.wantsLayer = true
+blur.layer?.cornerRadius = 18
+blur.layer?.masksToBounds = true
+panel.contentView = blur
+
+let icon = NSImageView(frame: NSRect(x: 18, y: 16, width: 40, height: 40))
+icon.image = NSImage(systemSymbolName: "key.horizontal.fill", accessibilityDescription: nil)?
+    .withSymbolConfiguration(.init(pointSize: 28, weight: .semibold))
+icon.contentTintColor = .systemYellow
+icon.wantsLayer = true
+blur.addSubview(icon)
+
+let title = NSTextField(labelWithString: "Touch your YubiKey")
+title.font = .systemFont(ofSize: 16, weight: .semibold)
+title.frame = NSRect(x: 72, y: 36, width: 256, height: 22)
+blur.addSubview(title)
+
+let sub = NSTextField(labelWithString: "Signing in \(repo)")
+sub.font = .systemFont(ofSize: 12)
+sub.textColor = .secondaryLabelColor
+sub.lineBreakMode = .byTruncatingTail
+sub.frame = NSRect(x: 72, y: 16, width: 256, height: 18)
+blur.addSubview(sub)
+
+// Top center of the screen with the mouse, just under the menu bar.
+let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main!
+let vf = screen.visibleFrame
+panel.setFrameOrigin(NSPoint(x: vf.midX - size.width / 2, y: vf.maxY - size.height - 12))
+panel.orderFrontRegardless()
+
+// Pulse the key icon.
+let pulse = CABasicAnimation(keyPath: "opacity")
+pulse.fromValue = 1.0
+pulse.toValue = 0.25
+pulse.duration = 0.6
+pulse.autoreverses = true
+pulse.repeatCount = .infinity
+icon.layer?.add(pulse, forKey: "pulse")
+
+// The Handoff alert tone, or Glass on systems without it.
+let handoff = URL(fileURLWithPath: "/System/Library/PrivateFrameworks/ToneLibrary.framework/Resources/AlertTones/EncoreInfinitum/Handoff-EncoreInfinitum.caf")
+(NSSound(contentsOf: handoff, byReference: true) ?? NSSound(named: "Glass"))?.play()
+
+// The card stops waiting for a touch long before this.
+Timer.scheduledTimer(withTimeInterval: 60, repeats: false) { _ in panel.orderOut(nil) }
+
+app.run()
