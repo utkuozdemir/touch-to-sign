@@ -38,6 +38,22 @@ if args.contains("--verify") {
     exit(2)
 }
 
+// pinentry takes focus to read the PIN. When it quits, macOS hands focus to the next app in
+// line, which is never a terminal kept out of the Dock, so give focus back to whoever had it.
+let front = NSWorkspace.shared.frontmostApplication
+var popup: NSRunningApplication?
+NSWorkspace.shared.notificationCenter.addObserver(
+    forName: NSWorkspace.didDeactivateApplicationNotification, object: nil, queue: .main
+) {
+    let app = $0.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+    if app == front {
+        popup = NSWorkspace.shared.frontmostApplication
+    } else if app == popup {
+        popup = nil
+        front?.activate()
+    }
+}
+
 // Unlike Process, posix_spawn keeps gpg in our process group, so Ctrl-C stops it too.
 var pid: pid_t = 0
 let rc = posix_spawn(&pid, gpg, nil, nil, argv, environ)
