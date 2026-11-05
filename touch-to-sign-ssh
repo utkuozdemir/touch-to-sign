@@ -1,0 +1,23 @@
+#!/bin/bash
+# Keep SSH PIN/password input on /dev/tty; only touch notifications get a HUD.
+dir=$(cd -- "$(dirname -- "$0")" && pwd -P) || exit 1
+case ${SSH_ASKPASS_PROMPT-} in
+    none) exec "$dir/touch-to-sign" --ssh-askpass "$@" ;;
+    '') ;;
+    *) exit 1 ;;
+esac
+unset SSH_ASKPASS_PROMPT
+export SSH_ASKPASS="$dir/$(basename -- "$0")"
+export SSH_ASKPASS_REQUIRE=never
+# OpenSSH's notification gate needs a display hint; the native HUD uses no X server.
+# A made-up display cannot forward X11, so keep ssh from trying.
+x11=()
+if [ -z "${DISPLAY-}" ]; then
+    export DISPLAY=:0
+    x11=(-o ForwardX11=no)
+fi
+
+# notify_start otherwise prefers a terminal message over askpass. Pipe ONLY stderr.
+# exec preserves stdin, stdout, the controlling terminal, exit status and signals.
+# cat drains the pipe and exits at EOF; no shell remains to swallow SSH's status.
+exec ssh "${x11[@]}" "$@" 2> >(/bin/cat >&2)
