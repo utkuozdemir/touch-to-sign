@@ -1,0 +1,70 @@
+---
+name: release
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Which part of the version to bump
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+jobs:
+  release:
+    # releases are cut from main only
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: write # create the tag and the GitHub release
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Create the release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BUMP: ${{ inputs.bump }}
+        run: |
+          latest=$(gh api --paginate "repos/${GH_REPO}/tags" --jq '.[].name' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          IFS=. read -r major minor patch <<<"${latest#v}"
+          case "${BUMP}" in
+            major) version="v$((major + 1)).0.0" ;;
+            minor) version="v${major}.$((minor + 1)).0" ;;
+            patch) version="v${major}.${minor}.$((patch + 1))" ;;
+          esac
+          # commits land on main directly, so the notes are the commit titles rather than merged pull requests
+          notes=$(gh api "repos/${GH_REPO}/compare/${latest}...${GITHUB_SHA}" --jq '.commits[] | "- " + (.commit.message | split("\n")[0])')
+          gh release create "${version}" --target "${GITHUB_SHA}" --title "${version}" --notes "${notes}"
+          echo "version=${version}" >>"${GITHUB_OUTPUT}"
+
+  # A separate job, so that re-running a failed tap update does not cut another release.
+  tap:
+    needs: release
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Update the Homebrew formula
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_ACCESS_TOKEN }} # contents write on utkuozdemir/homebrew-tap
+          VERSION: ${{ needs.release.outputs.version }}
+          FORMULA: repos/utkuozdemir/homebrew-tap/contents/Formula/touch-to-sign.rb
+        run: |
+          url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${VERSION}.tar.gz"
+          sha256=$(curl -fsSL "${url}" | sha256sum | cut -d' ' -f1)
+          gh api "${FORMULA}" --jq .content | base64 -d >formula.rb
+          sed -i -E "s|^(  url \").*(\")$|\1${url}\2|; s|^(  sha256 \").*(\")$|\1${sha256}\2|" formula.rb
+          grep -qF "url \"${url}\"" formula.rb && grep -qF "sha256 \"${sha256}\"" formula.rb
+          gh api -X PUT "${FORMULA}" \
+            -f message="chore: update touch-to-sign to ${VERSION}"$'\n\n'"Release notes: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${VERSION}." \
+            -f content="$(base64 -w0 formula.rb)" \
+            -f sha="$(gh api "${FORMULA}" --jq .sha)"
