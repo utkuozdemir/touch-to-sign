@@ -40,17 +40,29 @@ if args.contains("--verify") {
 
 // pinentry takes focus to read the PIN. When it quits, macOS hands focus to the next app in
 // line, which is never a terminal kept out of the Dock, so give focus back to whoever had it.
+// Match pinentry by name: whatever app happens to come up next (a notification from the
+// tool that ran git, say) is not it, and frontmostApplication can lag behind the notification.
 let front = NSWorkspace.shared.frontmostApplication
-var popup: NSRunningApplication?
-NSWorkspace.shared.notificationCenter.addObserver(
-    forName: NSWorkspace.didDeactivateApplicationNotification, object: nil, queue: .main
-) {
+var pinentry: pid_t?
+let workspace = NSWorkspace.shared.notificationCenter
+workspace.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) {
     let app = $0.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-    if app == front {
-        popup = NSWorkspace.shared.frontmostApplication
-    } else if app == popup {
-        popup = nil
-        front?.activate()
+    if let app, (app.executableURL?.lastPathComponent ?? app.localizedName ?? "").lowercased().contains("pinentry") {
+        pinentry = app.processIdentifier
+    }
+}
+workspace.addObserver(forName: NSWorkspace.didDeactivateApplicationNotification, object: nil, queue: .main) {
+    let app = $0.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+    guard let pid = pinentry, app?.processIdentifier == pid else { return }
+    // Still showing its window: something else took focus mid-prompt, so give it back to pinentry.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+        let windows = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] ?? []
+        if windows.contains(where: { $0[kCGWindowOwnerPID as String] as? pid_t == pid }) {
+            app?.activate()
+        } else {
+            pinentry = nil
+            front?.activate()
+        }
     }
 }
 
