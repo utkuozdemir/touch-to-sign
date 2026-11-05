@@ -2,7 +2,19 @@
 // The HUD never takes focus, so pinentry keeps the keyboard.
 import AppKit
 
+let defaultSound = "/System/Library/PrivateFrameworks/ToneLibrary.framework/Resources/AlertTones/EncoreInfinitum/Handoff-EncoreInfinitum.caf"
 let args = Array(CommandLine.arguments.dropFirst())
+
+if args.first == "--ssh-askpass" {
+    // Never read a PIN or answer a confirmation, and never fall through to GPG.
+    guard args.count == 2, ProcessInfo.processInfo.environment["SSH_ASKPASS_PROMPT"] == "none" else {
+        exit(1)
+    }
+    // OpenSSH owns this notification and sends SIGTERM when the touch wait ends.
+    for sig in [SIGTERM, SIGINT, SIGHUP] { signal(sig, SIG_DFL) }
+    showHUD(title: "Touch your YubiKey", subtitle: args[1], sound: defaultSound)
+    exit(0)
+}
 
 // git puts itself first in PATH, so this is the git that started us.
 func config(_ key: String) -> String? {
@@ -40,6 +52,7 @@ if args.contains("--verify") {
 
 // pinentry takes focus to read the PIN. When it quits, macOS hands focus to the next app in
 // line, which is never a terminal kept out of the Dock, so give focus back to whoever had it.
+#if !HEADLESS_TESTS
 // Match pinentry by name: whatever app happens to come up next (a notification from the
 // tool that ran git, say) is not it, and frontmostApplication can lag behind the notification.
 let front = NSWorkspace.shared.frontmostApplication
@@ -65,6 +78,7 @@ workspace.addObserver(forName: NSWorkspace.didDeactivateApplicationNotification,
         }
     }
 }
+#endif
 
 // Unlike Process, posix_spawn keeps gpg in our process group, so Ctrl-C stops it too.
 var pid: pid_t = 0
@@ -81,66 +95,73 @@ DispatchQueue.global().async {
 
 // git runs gpg from the top of the work tree.
 let repo = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).lastPathComponent
+showHUD(title: config("title") ?? "Touch your YubiKey", subtitle: "Signing in \(repo)",
+        sound: config("sound") ?? defaultSound)
 
-let app = NSApplication.shared
-app.setActivationPolicy(.accessory)
+func showHUD(title text: String, subtitle: String, sound: String) {
+#if HEADLESS_TESTS
+    dispatchMain()
+#else
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
 
-let size = NSSize(width: 340, height: 72)
-let panel = NSPanel(contentRect: NSRect(origin: .zero, size: size),
-                    styleMask: [.nonactivatingPanel, .borderless],
-                    backing: .buffered, defer: false)
-panel.level = .statusBar
-panel.isOpaque = false
-panel.backgroundColor = .clear
-panel.ignoresMouseEvents = true
-panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+    let size = NSSize(width: 340, height: 72)
+    let panel = NSPanel(contentRect: NSRect(origin: .zero, size: size),
+                        styleMask: [.nonactivatingPanel, .borderless],
+                        backing: .buffered, defer: false)
+    panel.level = .statusBar
+    panel.isOpaque = false
+    panel.backgroundColor = .clear
+    panel.ignoresMouseEvents = true
+    panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
 
-let blur = NSVisualEffectView(frame: NSRect(origin: .zero, size: size))
-blur.material = .hudWindow
-blur.state = .active
-blur.wantsLayer = true
-blur.layer?.cornerRadius = 18
-blur.layer?.masksToBounds = true
-panel.contentView = blur
+    let blur = NSVisualEffectView(frame: NSRect(origin: .zero, size: size))
+    blur.material = .hudWindow
+    blur.state = .active
+    blur.wantsLayer = true
+    blur.layer?.cornerRadius = 18
+    blur.layer?.masksToBounds = true
+    panel.contentView = blur
 
-let icon = NSImageView(frame: NSRect(x: 18, y: 16, width: 40, height: 40))
-icon.image = NSImage(systemSymbolName: "key.horizontal.fill", accessibilityDescription: nil)?
-    .withSymbolConfiguration(.init(pointSize: 28, weight: .semibold))
-icon.contentTintColor = .systemYellow
-icon.wantsLayer = true
-blur.addSubview(icon)
+    let icon = NSImageView(frame: NSRect(x: 18, y: 16, width: 40, height: 40))
+    icon.image = NSImage(systemSymbolName: "key.horizontal.fill", accessibilityDescription: nil)?
+        .withSymbolConfiguration(.init(pointSize: 28, weight: .semibold))
+    icon.contentTintColor = .systemYellow
+    icon.wantsLayer = true
+    blur.addSubview(icon)
 
-let title = NSTextField(labelWithString: config("title") ?? "Touch your YubiKey")
-title.font = .systemFont(ofSize: 16, weight: .semibold)
-title.frame = NSRect(x: 72, y: 36, width: 256, height: 22)
-blur.addSubview(title)
+    let title = NSTextField(labelWithString: text)
+    title.font = .systemFont(ofSize: 16, weight: .semibold)
+    title.frame = NSRect(x: 72, y: 36, width: 256, height: 22)
+    blur.addSubview(title)
 
-let sub = NSTextField(labelWithString: "Signing in \(repo)")
-sub.font = .systemFont(ofSize: 12)
-sub.textColor = .secondaryLabelColor
-sub.lineBreakMode = .byTruncatingTail
-sub.frame = NSRect(x: 72, y: 16, width: 256, height: 18)
-blur.addSubview(sub)
+    let sub = NSTextField(labelWithString: subtitle)
+    sub.font = .systemFont(ofSize: 12)
+    sub.textColor = .secondaryLabelColor
+    sub.lineBreakMode = .byTruncatingTail
+    sub.frame = NSRect(x: 72, y: 16, width: 256, height: 18)
+    blur.addSubview(sub)
 
-// Top center of the screen with the mouse, just under the menu bar.
-let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main!
-let vf = screen.visibleFrame
-panel.setFrameOrigin(NSPoint(x: vf.midX - size.width / 2, y: vf.maxY - size.height - 12))
-panel.orderFrontRegardless()
+    // Top center of the screen with the mouse, just under the menu bar.
+    let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main!
+    let vf = screen.visibleFrame
+    panel.setFrameOrigin(NSPoint(x: vf.midX - size.width / 2, y: vf.maxY - size.height - 12))
+    panel.orderFrontRegardless()
 
-// Pulse the key icon.
-let pulse = CABasicAnimation(keyPath: "opacity")
-pulse.fromValue = 1.0
-pulse.toValue = 0.25
-pulse.duration = 0.6
-pulse.autoreverses = true
-pulse.repeatCount = .infinity
-icon.layer?.add(pulse, forKey: "pulse")
+    // Pulse the key icon.
+    let pulse = CABasicAnimation(keyPath: "opacity")
+    pulse.fromValue = 1.0
+    pulse.toValue = 0.25
+    pulse.duration = 0.6
+    pulse.autoreverses = true
+    pulse.repeatCount = .infinity
+    icon.layer?.add(pulse, forKey: "pulse")
 
-// A file path, a system sound name or none. Glass where the Handoff alert tone is missing.
-let sound = config("sound") ?? "/System/Library/PrivateFrameworks/ToneLibrary.framework/Resources/AlertTones/EncoreInfinitum/Handoff-EncoreInfinitum.caf"
-if sound != "none" {
-    (NSSound(contentsOfFile: sound, byReference: true) ?? NSSound(named: sound) ?? NSSound(named: "Glass"))?.play()
+    // A file path, a system sound name or none. Glass where the Handoff alert tone is missing.
+    if sound != "none" {
+        (NSSound(contentsOfFile: sound, byReference: true) ?? NSSound(named: sound) ?? NSSound(named: "Glass"))?.play()
+    }
+
+    app.run()
+#endif
 }
-
-app.run()

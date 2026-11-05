@@ -1,6 +1,6 @@
 # touch-to-sign
 
-Shows a "Touch your YubiKey" popup on macOS while git signs a commit or a tag.
+Shows a "Touch your YubiKey" popup on macOS while git signs a commit or a tag, and optionally while ssh waits for a security key touch.
 
 The YubiKey only blinks while it waits for a touch, and it stops waiting after about 15 seconds. When the touch is missed, the signature fails, and the next try usually asks for the PIN again. The popup and its sound make the wait hard to miss.
 
@@ -70,6 +70,38 @@ Without `--global`, a setting applies only to the current repository.
 
 The popup shows up on every signature. If your key does not require a touch, it only flashes for a moment.
 
+## SSH touch notifications
+
+`touch-to-sign-ssh` runs ssh and shows the same popup while ssh waits for a touch on a security key (`ed25519-sk` or `ecdsa-sk`). PINs and passphrases are still typed in the terminal.
+
+Build it as under "Without Homebrew", and put `touch-to-sign-ssh` next to `touch-to-sign`:
+
+```sh
+install -m 755 touch-to-sign-ssh ~/.local/bin/touch-to-sign-ssh
+```
+
+Use it in place of `ssh`, or tell git to use it:
+
+```sh
+~/.local/bin/touch-to-sign-ssh -T git@github.com
+git config --global core.sshCommand ~/.local/bin/touch-to-sign-ssh
+```
+
+- The popup always uses the default text and sound. The git settings above do not apply.
+- ssh asks for a PIN or passphrase only in a terminal. Without one, such as a git push started from an editor or another tool, the key cannot be unlocked.
+- Keys served by an agent (the 1Password agent, say) usually get no popup, because the agent, not ssh, waits for the touch.
+- It replaces any `SSH_ASKPASS` you set, for that ssh only.
+
+ssh shows a touch notification through `SSH_ASKPASS` only when its stderr is not a terminal and `DISPLAY` is set. So `touch-to-sign-ssh` sets `SSH_ASKPASS` to itself and `SSH_ASKPASS_REQUIRE=never`, sets `DISPLAY=:0` if it is unset (and turns off X11 forwarding then), and passes ssh's stderr through a pipe. Stdin, stdout, signals and the exit code are ssh's own. When ssh runs it for the notification, it runs `touch-to-sign --ssh-askpass`, which shows the popup until ssh stops it. Any other askpass request fails.
+
+To check the popup without a key, run this and stop it with Ctrl-C:
+
+```sh
+SSH_ASKPASS_PROMPT=none ~/.local/bin/touch-to-sign --ssh-askpass 'Test prompt'
+```
+
+`python3 test-ssh.py` tests the launcher with a fake ssh and gpg. It does not touch a key or your config.
+
 ## Uninstall
 
 ```sh
@@ -78,3 +110,5 @@ brew uninstall touch-to-sign
 ```
 
 Without Homebrew, delete `~/.local/bin/touch-to-sign` instead.
+
+For SSH, run `git config --global --unset core.sshCommand` and delete `~/.local/bin/touch-to-sign-ssh`.
